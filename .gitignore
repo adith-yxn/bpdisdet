@@ -1,0 +1,38 @@
+New-Item .gitignore -ItemType File
+notepad .gitignore
+```
+
+Paste this into Notepad and save:
+```
+# Environment & secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Data / models
+*.h5
+*.pkl
+*.weights
+data/cache/
