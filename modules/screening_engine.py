@@ -1,251 +1,246 @@
 """
-screening_engine.py
-────────────────────
-Combines facial-affect metrics and linguistic analysis into a unified
-bipolar-spectrum screening score.  Follows an evidence-informed
-multi-modal fusion approach.
+screening_engine.py  ·  bpdisdet v2
+═════════════════════════════════════
+Three-modality fusion engine:
+  Facial Affect (25%) + Linguistic Analysis (40%) + Questionnaire (35%)
+Weights re-normalise when modalities are missing.
 """
 
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from modules.facial_analysis import FacialSession
-from modules.text_analysis import TextAnalysisResult
+from modules.facial_analysis  import FacialSession
+from modules.text_analysis    import TextAnalysisResult
+from modules.questionnaire    import QuestionnaireResult
 
 
-# ── Weights for multimodal fusion ─────────────────────────────────────────────
-# Empirically inspired by multi-modal emotion research; not clinically validated.
-MODAL_WEIGHTS = {
-    "facial": 0.40,
-    "text":   0.60,          # text is slightly more diagnostic
-}
+MODAL_WEIGHTS = {"facial": 0.25, "text": 0.40, "questionnaire": 0.35}
 
-RISK_THRESHOLDS = {
-    "high":     70,
-    "moderate": 45,
-    "low":      20,
-}
-
-RISK_COLORS = {
-    "high":     "#e05252",
-    "moderate": "#e09a2f",
-    "low":      "#4caf7d",
-    "minimal":  "#5b9bd5",
-}
+RISK_THRESHOLDS = {"high": 65, "moderate": 40, "low": 20}
 
 
 @dataclass
 class ScreeningResult:
-    # -- Composite scores ------------------------------------------------
-    composite_mania_score:       float = 0.0
-    composite_depression_score:  float = 0.0
-    composite_mixed_score:       float = 0.0
-    affective_instability_index: float = 0.0
+    # Composite scores
+    composite_mania:       float = 0.0
+    composite_depression:  float = 0.0
+    composite_mixed:       float = 0.0
+    affective_instability: float = 0.0
 
-    # -- Classification -------------------------------------------------
-    overall_risk:        str = "minimal"     # minimal / low / moderate / high
-    dominant_state:      str = "euthymic"
-    confidence_pct:      float = 0.0
+    # Classification
+    overall_risk:     str   = "minimal"
+    dominant_state:   str   = "euthymic"
+    confidence_pct:   float = 0.0
 
-    # -- Source data ----------------------------------------------------
-    facial_session:   Optional[FacialSession]       = None
-    text_results:     list[TextAnalysisResult]       = field(default_factory=list)
+    # Source data
+    facial_session:       Optional[FacialSession]       = None
+    text_results:         list[TextAnalysisResult]       = field(default_factory=list)
+    questionnaire_result: Optional[QuestionnaireResult]  = None
 
-    # -- Narrative & guidance -------------------------------------------
-    clinical_summary:    str  = ""
-    recommendations:     list = field(default_factory=list)
-    red_flags:           list = field(default_factory=list)
+    # Flags
+    has_facial:       bool = False
+    has_text:         bool = False
+    has_questionnaire:bool = False
 
-    # -- Metadata -------------------------------------------------------
-    timestamp:       float = field(default_factory=time.time)
-    session_id:      str   = ""
-    has_facial_data: bool  = False
-    has_text_data:   bool  = False
+    # Narrative
+    clinical_summary:  str  = ""
+    recommendations:   list = field(default_factory=list)
+    red_flags:         list = field(default_factory=list)
+
+    # Metadata
+    timestamp:   float = field(default_factory=time.time)
+    session_id:  str   = field(default_factory=lambda: str(uuid.uuid4())[:8].upper())
+
+    # Per-modality breakdowns (for radar chart)
+    modality_scores: dict = field(default_factory=dict)
 
 
 def compute_screening_result(
-    facial_session: Optional[FacialSession] = None,
-    text_results:   Optional[list[TextAnalysisResult]] = None,
-    patient_info:   Optional[dict] = None,
+    facial_session:       Optional[FacialSession]      = None,
+    text_results:         Optional[list[TextAnalysisResult]] = None,
+    questionnaire_result: Optional[QuestionnaireResult] = None,
+    patient_info:         Optional[dict]               = None,
 ) -> ScreeningResult:
-    """
-    Fuse facial and text modalities into a unified screening result.
-    Either modality can be absent; weights are re-normalised accordingly.
-    """
-    import uuid
+
     result = ScreeningResult(
-        session_id=str(uuid.uuid4())[:8].upper(),
         facial_session=facial_session,
         text_results=text_results or [],
+        questionnaire_result=questionnaire_result,
     )
 
-    # ── 1. Extract per-modality scores ────────────────────────────────
-    f_mania = f_depr = f_mixed = f_instab = 0.0
-    t_mania = t_depr = t_mixed = 0.0
-    t_confidence = 50.0
+    # ── Per-modality scores ───────────────────────────────────────────
+    wf = wt = wq = 0.0
+    f_mania = f_depr = f_mixed = f_inst = 0.0
+    t_mania = t_depr = t_mixed = t_conf = 0.0
+    q_mania = q_depr = q_mixed = 0.0
 
-    w_f = MODAL_WEIGHTS["facial"]
-    w_t = MODAL_WEIGHTS["text"]
-
-    if facial_session and len(facial_session.frames) >= 3:
-        result.has_facial_data = True
-        f_mania  = facial_session.mania_score
-        f_depr   = facial_session.depression_score
-        f_mixed  = facial_session.mixed_state_score
-        f_instab = min(100, facial_session.affective_instability * 20)
-    else:
-        w_f = 0.0
-        w_t = 1.0
+    if facial_session and len(facial_session.frames) >= 2:
+        result.has_facial = True
+        wf      = MODAL_WEIGHTS["facial"]
+        f_mania = facial_session.mania_score
+        f_depr  = facial_session.depression_score
+        f_mixed = facial_session.mixed_state_score
+        f_inst  = min(100, facial_session.affective_instability * 25)
 
     if text_results:
-        result.has_text_data = True
-        t_mania  = sum(r.mania_score    for r in text_results) / len(text_results)
-        t_depr   = sum(r.depression_score for r in text_results) / len(text_results)
-        t_mixed  = sum(r.mixed_score    for r in text_results) / len(text_results)
-        t_confidence = sum(r.confidence for r in text_results) / len(text_results)
-    else:
-        w_t = 0.0
-        w_f = 1.0
+        result.has_text = True
+        wt      = MODAL_WEIGHTS["text"]
+        t_mania = sum(r.mania_score    for r in text_results) / len(text_results)
+        t_depr  = sum(r.depression_score for r in text_results) / len(text_results)
+        t_mixed = sum(r.mixed_score    for r in text_results) / len(text_results)
+        t_conf  = sum(r.confidence     for r in text_results) / len(text_results)
 
-    if w_f + w_t == 0:
-        return result  # nothing to compute
+    if questionnaire_result:
+        result.has_questionnaire = True
+        wq      = MODAL_WEIGHTS["questionnaire"]
+        q_mania = questionnaire_result.mdq_scaled
+        q_depr  = questionnaire_result.phq9_scaled
+        q_mixed = questionnaire_result.als_scaled
 
-    norm = w_f + w_t
+    total_w = wf + wt + wq
+    if total_w == 0:
+        return result
 
-    # ── 2. Composite scores ───────────────────────────────────────────
-    result.composite_mania_score      = (w_f * f_mania  + w_t * t_mania)  / norm
-    result.composite_depression_score = (w_f * f_depr   + w_t * t_depr)   / norm
-    result.composite_mixed_score      = (w_f * f_mixed  + w_t * t_mixed)  / norm
-    result.affective_instability_index = min(100,
-        (f_instab * w_f + result.composite_mixed_score * w_t * 0.5) / norm)
+    # ── Composite scores ──────────────────────────────────────────────
+    result.composite_mania      = (wf*f_mania + wt*t_mania + wq*q_mania)      / total_w
+    result.composite_depression = (wf*f_depr  + wt*t_depr  + wq*q_depr)       / total_w
+    result.composite_mixed      = (wf*f_mixed + wt*t_mixed + wq*q_mixed*0.7)   / total_w
+    result.affective_instability = (
+        f_inst * wf + result.composite_mixed * wt * 0.4 +
+        (questionnaire_result.als_scaled if questionnaire_result else 0) * wq
+    ) / total_w
 
-    # ── 3. Dominant state ─────────────────────────────────────────────
-    max_score = max(result.composite_mania_score,
-                    result.composite_depression_score,
-                    result.composite_mixed_score)
+    # ── Dominant state ────────────────────────────────────────────────
+    peak_m = result.composite_mania
+    peak_d = result.composite_depression
+    peak_x = result.composite_mixed
 
-    if result.composite_mixed_score == max_score and max_score > 30:
+    if peak_x == max(peak_m, peak_d, peak_x) and peak_x > 28:
         result.dominant_state = "mixed"
-    elif result.composite_mania_score == max_score and max_score > 25:
+    elif peak_m == max(peak_m, peak_d, peak_x) and peak_m > 22:
         result.dominant_state = "manic"
-    elif result.composite_depression_score == max_score and max_score > 25:
+    elif peak_d == max(peak_m, peak_d, peak_x) and peak_d > 22:
         result.dominant_state = "depressive"
     else:
         result.dominant_state = "euthymic"
 
-    # ── 4. Overall risk ───────────────────────────────────────────────
-    peak = max(result.composite_mania_score,
-               result.composite_depression_score,
-               result.composite_mixed_score,
-               result.affective_instability_index)
+    # ── Overall risk ──────────────────────────────────────────────────
+    peak = max(result.composite_mania, result.composite_depression,
+               result.composite_mixed, result.affective_instability)
 
-    if peak >= RISK_THRESHOLDS["high"]:
-        result.overall_risk = "high"
-    elif peak >= RISK_THRESHOLDS["moderate"]:
-        result.overall_risk = "moderate"
-    elif peak >= RISK_THRESHOLDS["low"]:
-        result.overall_risk = "low"
-    else:
-        result.overall_risk = "minimal"
+    if   peak >= RISK_THRESHOLDS["high"]:     result.overall_risk = "high"
+    elif peak >= RISK_THRESHOLDS["moderate"]: result.overall_risk = "moderate"
+    elif peak >= RISK_THRESHOLDS["low"]:      result.overall_risk = "low"
+    else:                                      result.overall_risk = "minimal"
 
-    # Override with text risk if higher
-    for tr in text_results:
-        if tr.risk_level == "high":
+    # Override from text or questionnaire high-risk flags
+    for tr in result.text_results:
+        if tr.risk_level == "high" or tr.suicidal_flag:
             result.overall_risk = "high"
+    if questionnaire_result and questionnaire_result.phq9_safety_flag:
+        result.overall_risk = "high"
 
-    # ── 5. Confidence ─────────────────────────────────────────────────
-    face_conf = 60.0 if result.has_facial_data else 0.0
-    text_conf = t_confidence if result.has_text_data else 0.0
-    inputs    = (1 if result.has_facial_data else 0) + (1 if result.has_text_data else 0)
-    result.confidence_pct = (face_conf + text_conf) / max(inputs * 100, 1) * 100 if inputs else 0.0
-    result.confidence_pct = min(85.0, result.confidence_pct)  # cap at 85% — screening only
+    # ── Confidence ────────────────────────────────────────────────────
+    n = sum([result.has_facial, result.has_text, result.has_questionnaire])
+    base = ((60 if result.has_facial else 0) +
+            (t_conf if result.has_text else 0) +
+            (72 if result.has_questionnaire else 0))
+    result.confidence_pct = min(88.0, base / max(n * 100, 1) * 100)
 
-    # ── 6. Red flags ──────────────────────────────────────────────────
-    for tr in text_results:
-        for phrase in tr.key_phrases:
-            if phrase.startswith("⚠️"):
-                result.red_flags.append(phrase)
-        for rec in tr.recommendations:
-            if "URGENT" in rec:
-                result.red_flags.append(rec)
+    # ── Red flags ─────────────────────────────────────────────────────
+    for tr in result.text_results:
+        for kp in tr.key_phrases:
+            if kp.startswith("⚠"):
+                result.red_flags.append(f"[Text] {kp}")
+        if tr.suicidal_flag:
+            result.red_flags.append("[Text] Suicidal ideation markers detected in written text.")
 
-    if result.affective_instability_index > 60:
-        result.red_flags.append("High affective instability detected in facial expression.")
+    if questionnaire_result and questionnaire_result.phq9_safety_flag:
+        result.red_flags.append("[Questionnaire] PHQ-9 item 9 (suicidal ideation) endorsed.")
+    if result.affective_instability > 60:
+        result.red_flags.append("[Facial] High affective instability index detected.")
 
-    # ── 7. Clinical summary ───────────────────────────────────────────
-    modalities = []
-    if result.has_facial_data:
-        modalities.append("facial affect analysis")
-    if result.has_text_data:
-        modalities.append("linguistic analysis")
+    # ── Modality scores for radar ─────────────────────────────────────
+    result.modality_scores = {
+        "Facial Mania":    round(f_mania, 1),
+        "Facial Depr":     round(f_depr,  1),
+        "Facial Mixed":    round(f_mixed, 1),
+        "Text Mania":      round(t_mania, 1),
+        "Text Depr":       round(t_depr,  1),
+        "Text Mixed":      round(t_mixed, 1),
+        "MDQ (Mania)":     round(q_mania, 1),
+        "PHQ-9 (Depr)":    round(q_depr,  1),
+        "ALS (Lability)":  round(q_mixed, 1),
+    }
+
+    # ── Clinical summary ──────────────────────────────────────────────
+    modalities_used = []
+    if result.has_facial:        modalities_used.append("facial affect analysis")
+    if result.has_text:          modalities_used.append("linguistic analysis")
+    if result.has_questionnaire: modalities_used.append("validated questionnaires (MDQ-7, PHQ-9, ALS-SF)")
 
     result.clinical_summary = (
-        f"Multimodal screening using {' and '.join(modalities)} "
-        f"suggests a **{result.dominant_state.upper()}** affective pattern "
-        f"with a **{result.overall_risk.upper()} risk** signal. "
-        f"Mania indicators: {result.composite_mania_score:.0f}/100. "
-        f"Depression indicators: {result.composite_depression_score:.0f}/100. "
-        f"Affective instability index: {result.affective_instability_index:.0f}/100. "
-        f"Confidence: {result.confidence_pct:.0f}% (screening only — "
-        f"not a clinical diagnosis)."
+        f"Three-modality screening using {', '.join(modalities_used)} suggests a "
+        f"**{result.dominant_state.upper()}** affective pattern with **{result.overall_risk.upper()} RISK** signal. "
+        f"Composite mania index: {result.composite_mania:.0f}/100. "
+        f"Composite depression index: {result.composite_depression:.0f}/100. "
+        f"Affective instability index: {result.affective_instability:.0f}/100. "
+        f"Screening confidence: {result.confidence_pct:.0f}% "
+        f"(maximum 88% — this is a screening tool, not a clinical diagnosis)."
     )
 
-    # ── 8. Recommendations ────────────────────────────────────────────
+    # ── Recommendations ────────────────────────────────────────────────
     result.recommendations = _build_recommendations(result, patient_info)
-
     return result
 
 
 def _build_recommendations(result: ScreeningResult, patient_info: Optional[dict]) -> list:
     recs = []
 
-    # Crisis first
     if result.red_flags:
-        recs.append("🔴 IMMEDIATE: Potential crisis indicators found. Contact a mental health "
-                    "professional or a crisis helpline without delay.")
+        recs.append("🔴 IMMEDIATE ACTION: Crisis indicators detected — contact mental health services now.")
 
-    # Risk-level guidance
     if result.overall_risk == "high":
         recs += [
-            "Schedule an urgent psychiatric evaluation within 24–48 hours.",
-            "Share these screening results with your mental health provider.",
-            "Avoid making major decisions until evaluated by a clinician.",
+            "Urgent psychiatric evaluation within 24–48 hours.",
+            "Do not make major financial, relationship, or work decisions until evaluated.",
+            "Inform a trusted person about your current state.",
         ]
     elif result.overall_risk == "moderate":
         recs += [
-            "Book an appointment with a psychiatrist or psychologist within the next week.",
-            "Track mood, sleep, and energy levels daily using a mood diary.",
+            "Schedule a psychiatrist or psychologist appointment within 1 week.",
+            "Begin structured mood tracking (sleep, energy, mood, 0–10 daily).",
         ]
     elif result.overall_risk == "low":
         recs += [
-            "Consult your general practitioner about your mood patterns.",
-            "Consider a structured mood monitoring app (e.g. eMoods).",
+            "Discuss these results with your general practitioner.",
+            "Consider psychoeducation about mood disorders.",
         ]
     else:
-        recs.append("Continue monitoring mood wellbeing; no urgent action indicated.")
+        recs.append("No urgent concern. Maintain regular sleep, exercise, and social connection.")
 
-    # State-specific
     if result.dominant_state == "manic":
         recs += [
-            "Prioritise sleep regularity — disrupted sleep can trigger/worsen mania.",
-            "Limit stimulants (caffeine, alcohol) and avoid high-stimulation environments.",
+            "Stabilise sleep schedule — aim for 7–9 hours at consistent times.",
+            "Reduce stimulants, high-stimulation environments, and major decisions.",
+            "Mood stabiliser evaluation may be warranted.",
         ]
     elif result.dominant_state == "depressive":
         recs += [
-            "Maintain a regular daily routine including light physical activity.",
-            "Reach out to a trusted person in your support network.",
+            "Maintain daily structure and light physical activity.",
+            "Avoid alcohol and substance use.",
+            "If antidepressants are considered, ensure bipolar disorder has been ruled out first.",
         ]
     elif result.dominant_state == "mixed":
         recs += [
             "Mixed states carry elevated risk — clinical evaluation is strongly recommended.",
-            "Avoid abrupt changes in sleep schedule.",
+            "DBT-based emotion regulation and distress tolerance skills may be beneficial.",
         ]
 
-    # SDG-3 resource note
     recs.append(
-        "💡 Free/low-cost resources: iCall (India): 9152987821 | Vandrevala Foundation: 1860-2662-345 "
-        "| NIMHANS Helpline: 080-46110007 | WHO mhGAP resources: who.int/mhgap"
+        "💡 Crisis lines: iCall 9152987821 · Vandrevala 1860-2662-345 · "
+        "NIMHANS 080-46110007 · International: findahelpline.com"
     )
-
     return recs
