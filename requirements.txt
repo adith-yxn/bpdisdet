@@ -8,3 +8,4 @@ plotly>=5.19.0
 scipy>=1.12.0
 fpdf2>=2.7.9
 python-dotenv>=1.0.1
+bcrypt>=4.1.2

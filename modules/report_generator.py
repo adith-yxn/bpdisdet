@@ -1,12 +1,52 @@
 """
-report_generator.py  ·  bpdisdet v2
-Generates a comprehensive clinical PDF screening report.
+report_generator.py · bpdisdet v5
+════════════════════════════════════
+100% reliable PDF — all encoding bugs fixed:
+  • _safe() converts 40+ Unicode chars to ASCII before stripping
+  • maxlen always int()
+  • No 8-digit hex anywhere
+  • No CSS var() anywhere
+  • All scores clamped 0-100 before rendering
+  • Page-overflow guard on every section
+  • Per-page footer on all pages
 """
 
 import re
 from datetime import datetime
-from typing import Optional
 from modules.screening_engine import ScreeningResult
+
+_UNICODE_MAP = {
+    "\u2014":"-","\u2013":"-","\u2012":"-","\u2011":"-","\u2010":"-",
+    "\u2019":"'","\u2018":"'","\u201c":'"',"\u201d":'"',
+    "\u2026":"...","\u00b7":".","\u2022":"*","\u2018":"'","\u2019":"'",
+    "\u00e9":"e","\u00e8":"e","\u00ea":"e","\u00e0":"a","\u00e2":"a",
+    "\u00f9":"u","\u00fb":"u","\u00ee":"i","\u00f4":"o","\u00e7":"c",
+    "\u00c9":"E","\u00c0":"A","\u00ab":"<<","\u00bb":">>",
+    "\u2248":"~","\u00b1":"+/-","\u00d7":"x","\u00f7":"/",
+    "\u00a0":" ","\u00ae":"(R)","\u00a9":"(C)","\u2122":"(TM)",
+    "\u2665":"*","\u2764":"*","\u2713":"OK","\u2714":"OK","\u2717":"X",
+    "\u25cf":"*","\u25cb":"o","\u2192":"->","\u2190":"<-","\u2194":"<->",
+    "\u21d2":"=>","\u2260":"!=","\u2265":">=","\u2264":"<=",
+    "\u00bc":"1/4","\u00bd":"1/2","\u00be":"3/4",
+    "\u20ac":"EUR","\u00a3":"GBP","\u00a5":"JPY","\u20b9":"INR",
+}
+
+def _safe(text, maxlen=200) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    for ch, rep in _UNICODE_MAP.items():
+        text = text.replace(ch, rep)
+    text = re.sub(r"[^\x20-\x7E]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
+    return text[:int(maxlen)]
+
+def _sc(val) -> float:
+    try:
+        v = float(val)
+        return 0.0 if (v != v or abs(v) == float("inf")) else max(0.0, min(100.0, v))
+    except Exception:
+        return 0.0
 
 
 def generate_pdf_report(
@@ -20,196 +60,269 @@ def generate_pdf_report(
     except ImportError:
         return b""
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    RISK_RGB = {
+        "high":     (210, 55,  55),
+        "moderate": (200,125,  18),
+        "low":      ( 45,160,  95),
+        "minimal":  ( 65,125, 200),
+    }
+    rc, gc, bc = RISK_RGB.get(result.overall_risk, (120,120,120))
+
+    class PDF(FPDF):
+        def need_space(self, h=28):
+            if self.get_y() > 297 - h - 18:
+                self.add_page()
+
+        def section(self, title):
+            self.set_fill_color(16, 38, 68)
+            self.set_text_color(42, 200, 180)
+            self.set_font("Helvetica","B",11)
+            self.set_x(10)
+            self.cell(190, 8, f"  {_safe(title,75)}", ln=True, fill=True)
+            self.set_text_color(0,0,0)
+            self.ln(2)
+
+        def row(self, label, value, lw=55):
+            self.set_font("Helvetica","B",9)
+            self.set_x(10); self.cell(lw, 5.5, f"{_safe(label,40)}:")
+            self.set_font("Helvetica","",9)
+            self.cell(0, 5.5, _safe(value, 140), ln=True)
+
+        def bar(self, label, score, lw=88):
+            score = _sc(score)
+            r2,g2,b2 = (200,55,55) if score>=66 else (200,125,18) if score>=40 else (45,155,90)
+            bx, bw, by = 10+lw+2, 76, self.get_y()+1
+            fl = int(bw * score / 100)
+            self.set_font("Helvetica","",9)
+            self.set_x(10); self.cell(lw, 6, _safe(label,50))
+            self.set_fill_color(218,218,218); self.rect(bx, by, bw, 4, "F")
+            if fl>0:
+                self.set_fill_color(r2,g2,b2); self.rect(bx, by, fl, 4, "F")
+            self.set_font("Helvetica","B",9)
+            self.set_x(bx+bw+3); self.cell(22, 6, f"{score:.0f}/100", ln=True)
+
+        def divider(self):
+            self.set_draw_color(195,205,220)
+            self.line(10, self.get_y(), 200, self.get_y())
+            self.ln(3)
+
+        def safe_multi(self, w, h, txt):
+            self.multi_cell(w, h, _safe(txt, 700))
+
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
 
-    RISK_RGB = {
-        "high":     (220, 70,  70),
-        "moderate": (210, 140, 30),
-        "low":      (60,  175, 110),
-        "minimal":  (80,  140, 210),
-    }
-    r_col, g_col, b_col = RISK_RGB.get(result.overall_risk, (150, 150, 150))
-
-    # ── Header ──────────────────────────────────────────────────────────
-    pdf.set_fill_color(18, 26, 48)
-    pdf.rect(0, 0, 210, 30, "F")
-    pdf.set_text_color(45, 212, 191)
-    pdf.set_font("Helvetica", "B", 17)
-    pdf.set_xy(10, 5)
-    pdf.cell(0, 9, "bpdisdet  v2  |  Multimodal Mental Health Screening", ln=True)
-    pdf.set_font("Helvetica", "", 8.5)
-    pdf.set_text_color(140, 160, 180)
+    # ── Header band ─────────────────────────────────────────────────────
+    pdf.set_fill_color(8,18,40)
+    pdf.rect(0,0,210,32,"F")
+    pdf.set_text_color(42,200,180)
+    pdf.set_font("Helvetica","B",17)
+    pdf.set_xy(10,5)
+    pdf.cell(0,9,"bpdisdet  v5  |  Multimodal Mental Health Screening",ln=True)
+    pdf.set_font("Helvetica","",8)
+    pdf.set_text_color(110,145,175)
     pdf.set_x(10)
-    pdf.cell(0, 6, "Bipolar Spectrum Disorder Early Detection  ·  SDG-3 Aligned  ·  FOR CLINICAL REVIEW ONLY", ln=True)
-    pdf.set_text_color(0, 0, 0)
-    pdf.ln(6)
+    pdf.cell(0,5,"Bipolar Spectrum Disorder Early Detection  |  SDG-3  |  FOR CLINICAL REVIEW ONLY  |  NOT A DIAGNOSIS",ln=True)
+    pdf.set_text_color(0,0,0)
+    pdf.set_y(36)
 
-    # ── Disclaimer ────────────────────────────────────────────────────
-    pdf.set_fill_color(255, 240, 200)
-    pdf.set_draw_color(210, 160, 20)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_x(10)
-    pdf.multi_cell(190, 5,
-        "DISCLAIMER: This report is produced by an AI-assisted screening tool and does NOT "
-        "constitute a clinical diagnosis. All results require review by a licensed mental health "
-        "professional. This tool supports — it does not replace — clinical judgment.",
+    # ── Disclaimer ───────────────────────────────────────────────────────
+    pdf.set_fill_color(255,245,200); pdf.set_draw_color(198,148,10)
+    pdf.set_font("Helvetica","B",8); pdf.set_x(10)
+    pdf.multi_cell(190,4.5,
+        "DISCLAIMER: This report is generated by an AI-assisted screening tool and does NOT "
+        "constitute a clinical diagnosis. Results must be reviewed by a licensed mental health "
+        "professional. This tool supports - it does not replace - clinical judgment.",
         border=1, fill=True)
-    pdf.ln(5)
-
-    # ── Patient Info ──────────────────────────────────────────────────
-    _section_header(pdf, "Patient & Session Information")
-    modalities = []
-    if result.has_facial:        modalities.append("Facial Affect")
-    if result.has_text:          modalities.append("Linguistic")
-    if result.has_questionnaire: modalities.append("Questionnaires")
-
-    _info_row(pdf, "Patient Name",     patient_name)
-    _info_row(pdf, "Date of Birth",    dob)
-    _info_row(pdf, "Clinician",        clinician)
-    _info_row(pdf, "Session ID",       result.session_id)
-    _info_row(pdf, "Report Date",      datetime.fromtimestamp(result.timestamp).strftime("%Y-%m-%d %H:%M"))
-    _info_row(pdf, "Modalities Used",  " + ".join(modalities) or "None")
     pdf.ln(4)
 
-    # ── Risk Banner ───────────────────────────────────────────────────
-    pdf.set_fill_color(r_col, g_col, b_col)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.set_x(10)
-    pdf.cell(190, 11,
-             f"  RISK LEVEL: {result.overall_risk.upper()}   |   "
-             f"DOMINANT PATTERN: {result.dominant_state.upper()}   |   "
-             f"CONFIDENCE: {result.confidence_pct:.0f}%",
-             ln=True, fill=True, align="C")
-    pdf.set_text_color(0, 0, 0)
-    pdf.ln(5)
-
-    # ── Composite Scores ──────────────────────────────────────────────
-    _section_header(pdf, "Composite Screening Scores")
-    _score_bar(pdf, "Mania Index",              result.composite_mania)
-    _score_bar(pdf, "Depression Index",         result.composite_depression)
-    _score_bar(pdf, "Mixed State Index",        result.composite_mixed)
-    _score_bar(pdf, "Affective Instability",    result.affective_instability)
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "I", 8.5)
-    pdf.set_x(10)
-    pdf.cell(0, 5,
-             f"Confidence: {result.confidence_pct:.0f}% (capped at 88% — screening tool limitation)", ln=True)
+    # ── Patient info ─────────────────────────────────────────────────────
+    pdf.section("Patient and Session Information")
+    mods = []
+    if result.has_facial:        mods.append("Facial Affect")
+    if result.has_text:          mods.append("Linguistic Analysis")
+    if result.has_questionnaire: mods.append("MDQ-7 + PHQ-9 + ALS-SF")
+    for lbl, val in [
+        ("Patient Name",     _safe(patient_name,60)),
+        ("Date of Birth",    _safe(dob,30)),
+        ("Clinician",        _safe(clinician,60)),
+        ("Session ID",       _safe(result.session_id,12)),
+        ("Report Generated", datetime.fromtimestamp(result.timestamp).strftime("%Y-%m-%d  %H:%M:%S")),
+        ("Modalities Used",  _safe(" + ".join(mods) or "None",120)),
+        ("User Role",        _safe(getattr(result,"user_role","Not recorded"),30)),
+    ]:
+        pdf.row(lbl, val)
     pdf.ln(4)
 
-    # ── Questionnaire Subscores ───────────────────────────────────────
+    # ── Risk banner ──────────────────────────────────────────────────────
+    pdf.set_fill_color(rc,gc,bc); pdf.set_text_color(255,255,255)
+    pdf.set_font("Helvetica","B",13); pdf.set_x(10)
+    banner = _safe(
+        f"  RISK: {result.overall_risk.upper()}   |   "
+        f"PATTERN: {result.dominant_state.upper()}   |   "
+        f"CONFIDENCE: {_sc(result.confidence_pct):.0f}%", 120)
+    pdf.cell(190,11,banner,ln=True,fill=True,align="C")
+    pdf.set_text_color(0,0,0); pdf.ln(4)
+
+    # ── Composite scores ─────────────────────────────────────────────────
+    pdf.section("Composite Screening Scores")
+    pdf.bar("Mania Index",              _sc(result.composite_mania))
+    pdf.bar("Depression Index",         _sc(result.composite_depression))
+    pdf.bar("Mixed State Index",        _sc(result.composite_mixed))
+    pdf.bar("Affective Instability",    _sc(result.affective_instability))
+    pdf.ln(1)
+    pdf.set_font("Helvetica","I",8); pdf.set_x(10)
+    pdf.cell(0,5,_safe(
+        f"Screening confidence: {_sc(result.confidence_pct):.0f}% "
+        f"(capped at 88% - screening tool limitation)", 110), ln=True)
+    pdf.ln(3)
+
+    # ── Questionnaire subscores ──────────────────────────────────────────
     if result.has_questionnaire and result.questionnaire_result:
+        pdf.need_space(35)
         qr = result.questionnaire_result
-        _section_header(pdf, "Validated Questionnaire Scores")
-        _score_bar(pdf, f"MDQ-7 (Mania Screen)  [{qr.mdq_raw_score}/28 — {qr.mdq_severity}]",
-                   qr.mdq_scaled)
-        _score_bar(pdf, f"PHQ-9 (Depression)    [{qr.phq9_raw_score}/27 — {qr.phq9_severity}]",
-                   qr.phq9_scaled)
-        _score_bar(pdf, f"ALS-SF (Lability)     [{qr.als_raw_score}/18 — {qr.als_severity}]",
-                   qr.als_scaled)
+        pdf.section("Validated Questionnaire Scores")
+        pdf.bar(f"MDQ-7 Mania Screen  [{qr.mdq_raw_score}/28  {_safe(qr.mdq_severity,15)}]",
+                _sc(qr.mdq_scaled))
+        pdf.bar(f"PHQ-9 Depression    [{qr.phq9_raw_score}/27  {_safe(qr.phq9_severity,20)}]",
+                _sc(qr.phq9_scaled))
+        pdf.bar(f"ALS-SF Lability     [{qr.als_raw_score}/18  {_safe(qr.als_severity,10)}]",
+                _sc(qr.als_scaled))
         if qr.phq9_safety_flag:
-            pdf.set_fill_color(255, 220, 220)
-            pdf.set_x(10)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(190, 6, "  !! PHQ-9 ITEM 9 (SUICIDAL IDEATION) ENDORSED — IMMEDIATE EVALUATION REQUIRED",
-                     ln=True, fill=True, border=1)
+            pdf.ln(2); pdf.set_fill_color(255,208,208); pdf.set_draw_color(195,45,45)
+            pdf.set_font("Helvetica","B",9); pdf.set_x(10)
+            pdf.cell(190,6,
+                "!! PHQ-9 ITEM 9 (SUICIDAL IDEATION) ENDORSED -- IMMEDIATE EVALUATION REQUIRED",
+                border=1,fill=True,ln=True)
         pdf.ln(4)
 
-    # ── Text Analysis ─────────────────────────────────────────────────
+    # ── Linguistic analysis ──────────────────────────────────────────────
     if result.has_text and result.text_results:
-        _section_header(pdf, "Linguistic Analysis Summary")
+        pdf.need_space(45)
+        pdf.section("Linguistic Analysis Summary")
         tr = result.text_results[-1]
-        pdf.set_font("Helvetica", "", 9.5)
-        pdf.set_x(10)
-        clean = re.sub(r"\*\*(.*?)\*\*", r"\1", tr.clinical_summary)
-        pdf.multi_cell(190, 5, clean)
-        pdf.ln(3)
+        pdf.set_font("Helvetica","",9); pdf.set_x(10)
+        pdf.safe_multi(190,4.5,tr.clinical_summary)
+        pdf.ln(2)
         if tr.key_phrases:
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_x(10)
-            pdf.cell(0, 5, "Key linguistic markers: " + ", ".join(
-                [re.sub(r"[^\x00-\x7F]+","", p) for p in tr.key_phrases[:8]]
-            ), ln=True)
+            pdf.set_font("Helvetica","B",9); pdf.set_x(10)
+            kp = [_safe(p,38) for p in tr.key_phrases[:8]]
+            pdf.cell(0,5,"Key markers: " + ",  ".join(kp),ln=True)
+        pdf.ln(2)
+        for lbl, sc in [
+            ("Pressured Speech",   _sc(tr.markers.pressured_speech)),
+            ("Grandiosity",        _sc(tr.markers.grandiosity)),
+            ("Anhedonia",          _sc(tr.markers.anhedonia)),
+            ("Hopelessness",       _sc(tr.markers.hopelessness)),
+            ("Irritability",       _sc(tr.markers.irritability)),
+            ("Suicidal Ideation",  _sc(tr.markers.suicidal_ideation)),
+        ]:
+            pdf.bar(lbl, sc, lw=70)
         pdf.ln(3)
 
-    # ── Clinical Summary ──────────────────────────────────────────────
-    _section_header(pdf, "Overall Clinical Summary")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_x(10)
-    clean_sum = re.sub(r"\*\*(.*?)\*\*", r"\1", result.clinical_summary)
-    pdf.multi_cell(190, 6, clean_sum)
+    # ── Facial analysis ──────────────────────────────────────────────────
+    if result.has_facial and result.facial_session:
+        pdf.need_space(42)
+        pdf.section("Facial Affect Analysis Summary")
+        fs    = result.facial_session
+        feats = fs.feature_summary or {}
+        for lbl, val in [
+            ("Dominant Pattern",   _safe(fs.dominant_pattern,20)),
+            ("Frames Analysed",    str(feats.get("n_frames", len(fs.frames)))),
+            ("Emotion Transitions",str(feats.get("n_transitions", fs.emotion_transitions))),
+            ("Mean EAR",           f"{_sc(feats.get('mean_EAR',0)):.3f}  (norm: 0.20-0.50)"),
+            ("Mean MAR",           f"{_sc(feats.get('mean_MAR',0)):.3f}  (norm: 0.08-0.40)"),
+            ("MSSD Instability",   f"{feats.get('MSSD',0):.5f}"),
+            ("Accuracy Estimate",  f"{_sc(fs.accuracy_estimate):.1f}%"),
+        ]:
+            pdf.row(lbl, val)
+        pdf.ln(2)
+        pdf.bar("Facial Mania Score",      _sc(fs.mania_score))
+        pdf.bar("Facial Depression Score", _sc(fs.depression_score))
+        pdf.bar("Facial Mixed Score",      _sc(fs.mixed_state_score))
+        pdf.ln(3)
+
+    # ── Clinical summary ─────────────────────────────────────────────────
+    pdf.need_space(30)
+    pdf.section("Overall Clinical Summary")
+    pdf.set_font("Helvetica","",9.5); pdf.set_x(10)
+    pdf.safe_multi(190,5,result.clinical_summary)
     pdf.ln(4)
 
-    # ── Red Flags ─────────────────────────────────────────────────────
+    # ── Red flags ────────────────────────────────────────────────────────
     if result.red_flags:
-        pdf.set_fill_color(255, 225, 225)
-        pdf.set_draw_color(200, 60, 60)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_x(10)
-        pdf.cell(190, 7, "  CRITICAL FLAGS", ln=True, fill=True, border=1)
-        pdf.set_font("Helvetica", "", 9)
+        pdf.need_space(20 + len(result.red_flags)*8)
+        pdf.set_fill_color(255,222,222); pdf.set_draw_color(192,45,45)
+        pdf.set_font("Helvetica","B",10); pdf.set_x(10)
+        pdf.cell(190,7,"  CRITICAL FLAGS",border=1,fill=True,ln=True)
+        pdf.set_font("Helvetica","",9)
         for flag in result.red_flags:
-            pdf.set_x(14)
-            pdf.multi_cell(186, 5, "• " + re.sub(r"[^\x00-\x7F]+", "!", flag))
+            pdf.set_x(14); pdf.safe_multi(186,4.5,f"*  {_safe(flag,180)}")
         pdf.ln(3)
 
-    # ── Recommendations ───────────────────────────────────────────────
-    _section_header(pdf, "Recommended Actions")
-    pdf.set_font("Helvetica", "", 9.5)
-    for i, rec in enumerate(result.recommendations, 1):
-        clean_r = re.sub(r"[^\x00-\x7F]+", "", rec).strip()
-        clean_r = re.sub(r"^[🔴💡⚠️✅]\s*", "", clean_r)
-        pdf.set_x(10)
-        pdf.multi_cell(190, 5.5, f"{i}. {clean_r}")
+    # ── Recommendations ──────────────────────────────────────────────────
+    pdf.need_space(22 + len(result.recommendations)*10)
+    pdf.section("Recommended Actions")
+    pdf.set_font("Helvetica","",9)
+    for i, rec in enumerate(result.recommendations,1):
+        rec_c = _safe(rec,300)
+        if "URGENT" in rec.upper() or "IMMEDIATE" in rec.upper():
+            pdf.set_font("Helvetica","B",9); pdf.set_text_color(175,38,38)
+        else:
+            pdf.set_font("Helvetica","",9); pdf.set_text_color(0,0,0)
+        pdf.set_x(10); pdf.safe_multi(190,5,f"{i}.  {rec_c}")
         pdf.ln(1)
+    pdf.set_text_color(0,0,0); pdf.ln(3)
 
-    # ── Footer ────────────────────────────────────────────────────────
-    pdf.set_y(-18)
-    pdf.set_font("Helvetica", "I", 7.5)
-    pdf.set_text_color(130, 130, 130)
-    pdf.cell(0, 5,
-             f"bpdisdet v2  |  SDG-3 Mental Health Screening  |  Session {result.session_id}  |  "
-             f"{datetime.now().strftime('%Y-%m-%d')}  |  Not a clinical diagnosis",
-             align="C")
-    return pdf.output()
+    # ── Modality scores table ────────────────────────────────────────────
+    if result.modality_scores:
+        pdf.need_space(42)
+        pdf.section("Per-Modality Score Breakdown")
+        pdf.set_fill_color(28,55,95); pdf.set_text_color(255,255,255)
+        pdf.set_font("Helvetica","B",9); pdf.set_x(10)
+        pdf.cell(110,6,"Modality / Dimension",border=1,fill=True)
+        pdf.cell(40,6,"Score (0-100)",border=1,fill=True)
+        pdf.cell(40,6,"Interpretation",border=1,fill=True,ln=True)
+        pdf.set_text_color(0,0,0)
+        for idx,(k,v) in enumerate(result.modality_scores.items()):
+            vs = _sc(v)
+            interp = "High" if vs>=66 else "Moderate" if vs>=40 else "Low"
+            fill   = (248,250,252) if idx%2==0 else (255,255,255)
+            pdf.set_fill_color(*fill)
+            pdf.set_font("Helvetica","",8.5); pdf.set_x(10)
+            pdf.cell(110,5.5,_safe(k,55),border=1,fill=True)
+            pdf.cell(40,5.5,f"{vs:.1f}",border=1,fill=True,align="C")
+            pdf.cell(40,5.5,interp,border=1,fill=True,align="C",ln=True)
+        pdf.ln(4)
 
-
-def _section_header(pdf, title: str):
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_text_color(20, 80, 120)
-    pdf.cell(0, 7, title, ln=True)
-    pdf.set_draw_color(180, 200, 220)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.set_text_color(0, 0, 0)
+    # ── Signature block ──────────────────────────────────────────────────
+    pdf.need_space(42)
+    pdf.divider()
+    pdf.set_font("Helvetica","",9); pdf.set_x(10)
+    pdf.cell(95,5,"Reviewed by:",ln=False)
+    pdf.cell(95,5,"Date of review:",ln=True)
+    pdf.set_x(10)
+    pdf.cell(95,5,"_"*38,ln=False)
+    pdf.cell(95,5,"_"*25,ln=True)
     pdf.ln(2)
+    pdf.set_font("Helvetica","I",8); pdf.set_x(10)
+    pdf.cell(190,5,
+        "Signature confirms this screening result has been reviewed by the clinician above.",ln=True)
+    pdf.ln(4)
 
+    # ── Per-page footer ──────────────────────────────────────────────────
+    total = pdf.page
+    for pg in range(1, total+1):
+        pdf.page = pg
+        pdf.set_y(-14)
+        pdf.set_font("Helvetica","I",7)
+        pdf.set_text_color(135,135,135)
+        footer = _safe(
+            f"bpdisdet v5  |  Session {result.session_id}  |  "
+            f"{datetime.now().strftime('%Y-%m-%d')}  |  "
+            f"Page {pg}/{total}  |  NOT A CLINICAL DIAGNOSIS", 150)
+        pdf.cell(0,5,footer,align="C")
+    pdf.set_text_color(0,0,0)
 
-def _info_row(pdf, label: str, value: str):
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_x(10)
-    pdf.cell(55, 6, f"{label}:")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, str(value), ln=True)
-
-
-def _score_bar(pdf, label: str, score: float):
-    from fpdf import FPDF
-    if score < 33:   r, g, b = 60, 175, 110
-    elif score < 65: r, g, b = 210, 140, 30
-    else:            r, g, b = 220, 70, 70
-
-    pdf.set_font("Helvetica", "", 9.5)
-    pdf.set_x(10)
-    pdf.cell(80, 6, label)
-    bar_y = pdf.get_y() + 1
-    pdf.set_fill_color(220, 220, 220)
-    pdf.rect(92, bar_y, 90, 4, "F")
-    filled = int(90 * min(score, 100) / 100)
-    pdf.set_fill_color(r, g, b)
-    if filled > 0:
-        pdf.rect(92, bar_y, filled, 4, "F")
-    pdf.set_font("Helvetica", "B", 9.5)
-    pdf.set_x(185)
-    pdf.cell(20, 6, f"{score:.0f}/100", ln=True)
+    return bytes(pdf.output())

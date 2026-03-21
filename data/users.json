@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "hash": "3a6a430918df6f93fa7d5b6e1a8d8e5b8f4c9d2e1a7b3c5f8e2d4a6b9c1e3f5a",
+    "role": "admin",
+    "display_name": "System Administrator",
+    "email": "admin@bpdisdet.app",
+    "org": "bpdisdet",
+    "dob": "",
+    "phone": "",
+    "created_at": "2025-01-01T00:00:00",
+    "theme": "dark",
+    "avatar_letter": "A"
+  },
+  "adithyan": {
+    "hash": "87f19816834a0bf517581b9b3844cf140d6196205d160383a2f8442714ea9ce7",
+    "role": "researcher",
+    "display_name": "adithyan",
+    "email": "adithyanunni865@gmail.com",
+    "org": "",
+    "dob": "",
+    "phone": "",
+    "created_at": "2026-03-21T15:35:38.062077",
+    "theme": "dark",
+    "avatar_letter": "A"
+  }
+}
