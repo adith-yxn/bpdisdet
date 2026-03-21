@@ -1,5 +1,5 @@
 """
-app.py · bpdisdet v5
+app.py · bpdisdet v8
 ══════════════════════════════════════════════════════════════
 Professional Multimodal Bipolar Spectrum Screening System
 All bugs fixed — all 5 tabs work across all 4 themes.
@@ -112,7 +112,7 @@ with st.sidebar:
     if st.button("Sign Out", use_container_width=True): logout()
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<p class="sidebar-brand">🧠 bpdisdet</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sidebar-version">v5.0 &nbsp;&middot;&nbsp; Bipolar Spectrum Screening</p>',
+    st.markdown('<p class="sidebar-version">v8.0 &nbsp;&middot;&nbsp; Bipolar Spectrum Screening</p>',
                 unsafe_allow_html=True)
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -173,7 +173,7 @@ with st.sidebar:
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:.69rem;color:var(--fg3);text-align:center;line-height:2">'
-                'v5.0 &middot; SDG-3 Aligned<br>Research use only<br>'
+                'v8.0 &middot; SDG-3 Aligned<br>Research use only<br>'
                 'Not a diagnostic instrument</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -182,7 +182,7 @@ with st.sidebar:
 st.markdown("""
 <div class="hero">
   <h1>bpdisdet</h1>
-  <div class="sub">Multimodal Bipolar Spectrum Early Detection &nbsp;&middot;&nbsp; v5.0</div>
+  <div class="sub">Multimodal Bipolar Spectrum Early Detection &nbsp;&middot;&nbsp; v8.0</div>
   <div class="badge">&#10022; SDG-3 &middot; Login-Secured &middot; 4 Themes &middot; 90%+ Accuracy</div>
 </div>
 <div class="disclaimer">
@@ -712,7 +712,7 @@ with t5:
                     clinician=rc3 or "Not specified")
             if pdf and len(pdf)>1000:
                 st.download_button("⬇️  Download PDF Report",pdf,
-                    f"bpdisdet_v5_{res.session_id}.pdf","application/pdf",
+                    f"bpdisdet_v8_{res.session_id}.pdf","application/pdf",
                     use_container_width=True)
                 st.success(f"PDF ready — {len(pdf)//1024} KB")
             else:
@@ -740,13 +740,13 @@ with t5:
             "modality_scores":res.modality_scores,
             "red_flags":res.red_flags,"recommendations":res.recommendations}
         st.download_button("⬇️  Export JSON",json.dumps(ex,indent=2),
-            f"bpdisdet_v5_{res.session_id}.json","application/json",
+            f"bpdisdet_v8_{res.session_id}.json","application/json",
             use_container_width=True)
 
     st.divider()
     st.markdown('<div style="font-size:.72rem;color:var(--fg3);text-align:center;'
                 'line-height:2.1;padding:.8rem">'
-                '<b style="color:var(--fg2)">bpdisdet v5</b> &nbsp;&middot;&nbsp; '
+                '<b style="color:var(--fg2)">bpdisdet v8</b> &nbsp;&middot;&nbsp; '
                 'Multimodal Mental Health Screening &nbsp;&middot;&nbsp; SDG-3<br>'
                 'Login-secured &nbsp;&middot;&nbsp; 4 Themes &nbsp;&middot;&nbsp; '
                 '90%+ Accuracy &nbsp;&middot;&nbsp; 100% PDF Reliability<br>'
